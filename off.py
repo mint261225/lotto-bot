@@ -19,7 +19,6 @@ from linebot.v3.messaging import (
     MessagingApi,
     ReplyMessageRequest,
     PushMessageRequest,
-    MulticastRequest,
     TextMessage,
     ImageMessage,
 )
@@ -221,28 +220,38 @@ def safe_send(event: MessageEvent, messages: List[Any]) -> None:
     except Exception as e:
         app.logger.warning(f"reply failed (unknown): {e}")
 def push_to_all(messages: List[Any], exclude_id: Optional[str] = None) -> None:
-    # 1. รวบรวม ID กลุ่มทั้งหมดมาก่อน (ตัดกลุ่มที่คนพิมพ์สั่งออก ถ้ามี)
+    """ส่งข้อความไปยังทุก Group ID ที่บันทึกไว้ (ใช้ push_message ทีละกลุ่ม)
+
+    หมายเหตุ: LINE Multicast รองรับเฉพาะ userId เท่านั้น ถ้าเอา groupId ไปใส่จะได้ 400
+    """
     all_targets = list(iter_all_targets(exclude_id=exclude_id))
     if not all_targets:
         print("⚠️ ไม่มีกลุ่มเป้าหมายให้ส่ง")
         return
-    print(f"กำลังเริ่มส่ง Multicast ไปยัง {len(all_targets)} กลุ่ม...")
-    # 2. LINE Multicast ส่งได้สูงสุดทีละ 500 ID
-    chunk_size = 500
+
+    print(f"เริ่มส่ง Push ไปยัง {len(all_targets)} กลุ่ม...")
+    ok = 0
+    fail = 0
+
+    # เปิด ApiClient ครั้งเดียว แล้ววนส่งทีละกลุ่ม (เร็วกว่า/เสถียรกว่า)
     with ApiClient(config) as api_client:
         api = MessagingApi(api_client)
-        # วนลูปส่งทีละก้อน (สำหรับคุณที่มี 300 กลุ่ม จะทำงานรอบเดียวจบ)
-        for i in range(0, len(all_targets), chunk_size):
-            chunk = all_targets[i : i + chunk_size]
+        for gid in all_targets:
             try:
-                req = MulticastRequest(to=chunk, messages=messages)
-                api.multicast(req)
-                print(f"✅ ส่งสำเร็จไปแล้ว {len(chunk)} กลุ่ม")
+                req = PushMessageRequest(to=gid, messages=messages)
+                api.push_message(req)
+                ok += 1
             except ApiException as e:
-                app.logger.warning(f"Multicast failed: {e}")
-                print(f"❌ ส่งไม่ผ่าน: {e}")
+                fail += 1
+                app.logger.warning(f"Push failed to group {gid}: {e}")
+                print(f"❌ ส่งไม่ผ่าน (group): {gid} | {e}")
             except Exception as e:
-                app.logger.warning(f"Multicast error: {e}")
+                fail += 1
+                app.logger.warning(f"Push error to group {gid}: {e}")
+                print(f"❌ ส่งไม่ผ่าน (group): {gid} | {e}")
+
+    print(f"สรุป: ✅สำเร็จ {ok} กลุ่ม | ❌ล้มเหลว {fail} กลุ่ม")
+
 # Fonts
 FONT_REGULAR_PATH = os.path.join(BASE_DIR, "fonts", "Sarabun-Regular.ttf")
 FONT_BOLD_PATH = os.path.join(BASE_DIR, "fonts", "Sarabun-Bold.ttf")
@@ -594,4 +603,3 @@ def on_text(event: MessageEvent):
     return
 if __name__ == "__main__":
     app.run(port=5000, debug=True)
-
